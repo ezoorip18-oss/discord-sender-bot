@@ -1,38 +1,42 @@
-import { type User, type InsertUser } from "@shared/schema";
-import { randomUUID } from "crypto";
 
-// modify the interface with any CRUD methods
-// you might need
+import { db } from "./db";
+import { botConfig, type BotConfig, type InsertBotConfig, type UpdateBotConfig } from "@shared/schema";
+import { eq } from "drizzle-orm";
 
 export interface IStorage {
-  getUser(id: string): Promise<User | undefined>;
-  getUserByUsername(username: string): Promise<User | undefined>;
-  createUser(user: InsertUser): Promise<User>;
+  getConfig(): Promise<BotConfig | undefined>;
+  updateConfig(config: InsertBotConfig): Promise<BotConfig>;
+  updateStatus(isRunning: boolean, lastRun?: string): Promise<void>;
 }
 
-export class MemStorage implements IStorage {
-  private users: Map<string, User>;
-
-  constructor() {
-    this.users = new Map();
+export class DatabaseStorage implements IStorage {
+  async getConfig(): Promise<BotConfig | undefined> {
+    const configs = await db.select().from(botConfig).limit(1);
+    return configs[0];
   }
 
-  async getUser(id: string): Promise<User | undefined> {
-    return this.users.get(id);
+  async updateConfig(insertConfig: InsertBotConfig): Promise<BotConfig> {
+    const existing = await this.getConfig();
+    if (existing) {
+      const [updated] = await db.update(botConfig)
+        .set(insertConfig)
+        .where(eq(botConfig.id, existing.id))
+        .returning();
+      return updated;
+    } else {
+      const [created] = await db.insert(botConfig).values(insertConfig).returning();
+      return created;
+    }
   }
 
-  async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.username === username,
-    );
-  }
-
-  async createUser(insertUser: InsertUser): Promise<User> {
-    const id = randomUUID();
-    const user: User = { ...insertUser, id };
-    this.users.set(id, user);
-    return user;
+  async updateStatus(isRunning: boolean, lastRun?: string): Promise<void> {
+    const existing = await this.getConfig();
+    if (existing) {
+      await db.update(botConfig)
+        .set({ isRunning, ...(lastRun ? { lastRun } : {}) })
+        .where(eq(botConfig.id, existing.id));
+    }
   }
 }
 
-export const storage = new MemStorage();
+export const storage = new DatabaseStorage();
