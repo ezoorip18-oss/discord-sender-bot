@@ -1,34 +1,24 @@
 
 import { z } from 'zod';
-import { insertBotConfigSchema, botConfig } from './schema';
 
 export const api = {
-  config: {
-    get: {
-      method: 'GET' as const,
-      path: '/api/config',
-      responses: {
-        200: z.custom<typeof botConfig.$inferSelect>(),
-        404: z.object({ message: z.string() }),
-      },
-    },
-    update: {
+  token: {
+    save: {
       method: 'POST' as const,
-      path: '/api/config',
-      input: insertBotConfigSchema,
+      path: '/api/token',
+      input: z.object({ token: z.string().min(1, 'Token is required') }),
       responses: {
-        200: z.custom<typeof botConfig.$inferSelect>(),
+        200: z.object({ ok: z.boolean() }),
         400: z.object({ message: z.string() }),
       },
     },
-    toggle: {
-      method: 'POST' as const,
-      path: '/api/config/toggle',
-      input: z.object({ isRunning: z.boolean() }),
+    get: {
+      method: 'GET' as const,
+      path: '/api/token',
       responses: {
-        200: z.object({ isRunning: z.boolean(), status: z.string() }),
+        200: z.object({ token: z.string() }),
       },
-    }
+    },
   },
   massDm: {
     start: {
@@ -59,6 +49,21 @@ export const api = {
         200: z.object({ isRunning: z.boolean() }),
       },
     },
+    stats: {
+      method: 'GET' as const,
+      path: '/api/mass-dm/stats',
+      responses: {
+        200: z.object({
+          guildName: z.string(),
+          guildId: z.string(),
+          sent: z.number(),
+          failed: z.number(),
+          skipped: z.number(),
+          total: z.number(),
+          complete: z.boolean(),
+        }).nullable(),
+      },
+    },
   },
   logs: {
     list: {
@@ -74,15 +79,3 @@ export const api = {
     }
   }
 };
-
-export function buildUrl(path: string, params?: Record<string, string | number>): string {
-  let url = path;
-  if (params) {
-    Object.entries(params).forEach(([key, value]) => {
-      if (url.includes(`:${key}`)) {
-        url = url.replace(`:${key}`, String(value));
-      }
-    });
-  }
-  return url;
-}

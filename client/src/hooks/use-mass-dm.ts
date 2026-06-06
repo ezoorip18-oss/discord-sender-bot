@@ -3,17 +3,36 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@shared/routes";
 import { useToast } from "@/hooks/use-toast";
 
-const MASS_DM_STATUS_KEY = [api.massDm.status.path];
-
 export function useMassDmStatus() {
   return useQuery({
-    queryKey: MASS_DM_STATUS_KEY,
+    queryKey: [api.massDm.status.path],
     queryFn: async () => {
       const res = await fetch(api.massDm.status.path);
-      if (!res.ok) throw new Error("Failed to fetch mass DM status");
+      if (!res.ok) throw new Error("Failed to fetch status");
       return (await res.json()) as { isRunning: boolean };
     },
-    refetchInterval: 3000,
+    refetchInterval: 2000,
+  });
+}
+
+export function useMassDmStats() {
+  return useQuery({
+    queryKey: [api.massDm.stats.path],
+    queryFn: async () => {
+      const res = await fetch(api.massDm.stats.path);
+      if (!res.ok) throw new Error("Failed to fetch stats");
+      const data = await res.json();
+      return data as {
+        guildName: string;
+        guildId: string;
+        sent: number;
+        failed: number;
+        skipped: number;
+        total: number;
+        complete: boolean;
+      } | null;
+    },
+    refetchInterval: 1500,
   });
 }
 
@@ -30,16 +49,17 @@ export function useStartMassDm() {
       });
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.message || "Failed to start mass DM campaign");
+        throw new Error(err.message || "Failed to start campaign");
       }
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: MASS_DM_STATUS_KEY });
+      queryClient.invalidateQueries({ queryKey: [api.massDm.status.path] });
+      queryClient.invalidateQueries({ queryKey: [api.massDm.stats.path] });
       queryClient.invalidateQueries({ queryKey: [api.logs.list.path] });
       toast({
         title: "Campaign Started",
-        description: "Mass DM campaign is now running. Watch the logs for progress.",
+        description: "Mass DM campaign is running. Watch the stats update live.",
         className: "bg-violet-600 text-white border-none",
       });
     },
@@ -60,17 +80,56 @@ export function useStopMassDm() {
   return useMutation({
     mutationFn: async () => {
       const res = await fetch(api.massDm.stop.path, { method: "POST" });
-      if (!res.ok) throw new Error("Failed to stop mass DM campaign");
+      if (!res.ok) throw new Error("Failed to stop campaign");
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: MASS_DM_STATUS_KEY });
+      queryClient.invalidateQueries({ queryKey: [api.massDm.status.path] });
       queryClient.invalidateQueries({ queryKey: [api.logs.list.path] });
       toast({
         title: "Campaign Stopped",
         description: "The mass DM campaign has been terminated.",
         className: "bg-zinc-700 text-white border-none",
       });
+    },
+  });
+}
+
+export function useSaveToken() {
+  const { toast } = useToast();
+  return useMutation({
+    mutationFn: async (token: string) => {
+      const res = await fetch(api.token.save.path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.message || "Failed to save token");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({
+        title: "Token Saved",
+        description: "Your Discord token has been saved.",
+        className: "bg-green-600 text-white border-none",
+      });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+}
+
+export function useGetToken() {
+  return useQuery({
+    queryKey: [api.token.get.path],
+    queryFn: async () => {
+      const res = await fetch(api.token.get.path);
+      if (!res.ok) return { token: "" };
+      return (await res.json()) as { token: string };
     },
   });
 }

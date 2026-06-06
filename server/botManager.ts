@@ -12,10 +12,20 @@ export interface LogEntry {
   type: 'info' | 'error' | 'success';
 }
 
+export interface MassDmStats {
+  guildName: string;
+  guildId: string;
+  sent: number;
+  failed: number;
+  skipped: number;
+  total: number;
+  complete: boolean;
+}
+
 class BotManager {
   private process: ChildProcess | null = null;
-  private massDmProcess: ChildProcess | null = null;
   private logs: LogEntry[] = [];
+  private stats: MassDmStats | null = null;
   private readonly MAX_LOGS = 200;
 
   constructor() {
@@ -38,36 +48,56 @@ class BotManager {
     return this.logs;
   }
 
+  getMassDmStats(): MassDmStats | null {
+    return this.stats;
+  }
+
   isRunning() {
     return this.process !== null && this.process.exitCode === null;
   }
 
-  isMassDmRunning() {
-    return this.massDmProcess !== null && this.massDmProcess.exitCode === null;
-  }
-
-  start(token: string, channelId: string, message: string, cooldownMinutes: number) {
+  startMassDm(token: string, serverId: string, dmMessage: string, delay: number) {
     if (this.isRunning()) {
-      this.addLog("Attempted to start bot while already running", 'error');
-      return;
+      this.addLog("Mass DM campaign is already running", 'error');
+      return false;
     }
 
-    this.addLog("Starting auto-send bot process...", 'info');
+    // Reset stats for new campaign
+    this.stats = null;
+
+    this.addLog(`Starting mass DM campaign to server ${serverId}...`, 'info');
 
     const botPath = path.resolve(process.cwd(), "bot.py");
 
     this.process = spawn("python3", [
       botPath,
       "--token", token,
-      "--mode", "auto_send",
-      "--channel", channelId,
-      "--message", message,
-      "--interval", String(cooldownMinutes * 60)
+      "--server", serverId,
+      "--dm-message", dmMessage,
+      "--delay", String(delay),
     ]);
 
     this.process.stdout?.on("data", (data) => {
-      const msg = data.toString().trim();
-      if (msg) this.addLog(msg, 'info');
+      const raw = data.toString();
+      const lines = raw.split("\n");
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+
+        if (trimmed.startsWith("[STATS_JSON]")) {
+          try {
+            const json = trimmed.slice("[STATS_JSON]".length).trim();
+            const parsed = JSON.parse(json) as MassDmStats;
+            this.stats = parsed;
+            // Don't add stats lines to visible logs — they're high-frequency noise
+          } catch {
+            // ignore parse error
+          }
+        } else {
+          const type: LogEntry['type'] = trimmed.includes('complete') ? 'success' : 'info';
+          this.addLog(trimmed, type);
+        }
+      }
     });
 
     this.process.stderr?.on("data", (data) => {
@@ -76,76 +106,26 @@ class BotManager {
     });
 
     this.process.on("close", (code) => {
-      this.addLog(`Auto-send process exited with code ${code}`, code === 0 || code === null ? 'info' : 'error');
-      this.process = null;
-    });
-
-    this.process.on("error", (err) => {
-      this.addLog(`Failed to start auto-send process: ${err.message}`, 'error');
-      this.process = null;
-    });
-  }
-
-  stop() {
-    if (this.process) {
-      this.addLog("Stopping auto-send bot process...", 'info');
-      this.process.kill();
-      this.process = null;
-    } else {
-      this.addLog("Attempted to stop bot but it is not running", 'info');
-    }
-  }
-
-  startMassDm(token: string, serverId: string, dmMessage: string, delay: number) {
-    if (this.isMassDmRunning()) {
-      this.addLog("Mass DM campaign is already running", 'error');
-      return false;
-    }
-
-    this.addLog(`Starting mass DM campaign to server ${serverId}...`, 'info');
-
-    const botPath = path.resolve(process.cwd(), "bot.py");
-
-    this.massDmProcess = spawn("python3", [
-      botPath,
-      "--token", token,
-      "--mode", "mass_dm",
-      "--server", serverId,
-      "--dm-message", dmMessage,
-      "--delay", String(delay)
-    ]);
-
-    this.massDmProcess.stdout?.on("data", (data) => {
-      const msg = data.toString().trim();
-      if (msg) this.addLog(msg, 'info');
-    });
-
-    this.massDmProcess.stderr?.on("data", (data) => {
-      const msg = data.toString().trim();
-      if (msg) this.addLog(msg, 'error');
-    });
-
-    this.massDmProcess.on("close", (code) => {
       this.addLog(
         `Mass DM process exited with code ${code}`,
         code === 0 || code === null ? 'success' : 'error'
       );
-      this.massDmProcess = null;
+      this.process = null;
     });
 
-    this.massDmProcess.on("error", (err) => {
+    this.process.on("error", (err) => {
       this.addLog(`Failed to start mass DM process: ${err.message}`, 'error');
-      this.massDmProcess = null;
+      this.process = null;
     });
 
     return true;
   }
 
   stopMassDm() {
-    if (this.massDmProcess) {
+    if (this.process) {
       this.addLog("Stopping mass DM campaign...", 'info');
-      this.massDmProcess.kill();
-      this.massDmProcess = null;
+      this.process.kill();
+      this.process = null;
     }
   }
 }
