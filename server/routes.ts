@@ -20,12 +20,8 @@ export async function registerRoutes(
   app.get(api.config.get.path, async (req, res) => {
     const config = await storage.getConfig();
     if (!config) {
-      // Return defaults or 404. Let's return a default object structure if none exists
-      // so frontend doesn't crash, but with empty values.
-      // Or actually, just 404 is fine as per route spec, frontend handles it.
       return res.status(404).json({ message: "No configuration found" });
     }
-    // Sync running state with manager
     const actualRunning = botManager.isRunning();
     if (config.isRunning !== actualRunning) {
       await storage.updateStatus(actualRunning);
@@ -38,14 +34,13 @@ export async function registerRoutes(
     try {
       const input = api.config.update.input.parse(req.body);
       const config = await storage.updateConfig(input);
-      
-      // If running, restart with new config
+
       if (botManager.isRunning()) {
         botManager.stop();
         botManager.start(config.token, config.channelId, config.message, config.cooldown);
         await storage.updateStatus(true);
       }
-      
+
       res.json(config);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -58,7 +53,7 @@ export async function registerRoutes(
   app.post(api.config.toggle.path, async (req, res) => {
     const { isRunning } = req.body;
     const config = await storage.getConfig();
-    
+
     if (!config) {
       return res.status(400).json({ message: "Configure the bot first" });
     }
@@ -72,6 +67,49 @@ export async function registerRoutes(
       await storage.updateStatus(false);
       res.json({ isRunning: false, status: "Stopped" });
     }
+  });
+
+  // ── Mass DM routes ──────────────────────────────────────
+  app.post(api.massDm.start.path, async (req, res) => {
+    try {
+      const input = api.massDm.start.input.parse(req.body);
+
+      if (botManager.isMassDmRunning()) {
+        return res.status(409).json({ message: "A mass DM campaign is already running" });
+      }
+
+      const config = await storage.getConfig();
+      if (!config || !config.token) {
+        return res.status(400).json({ message: "Bot token not configured. Set it in the Bot Config section first." });
+      }
+
+      const started = botManager.startMassDm(
+        config.token,
+        input.serverId,
+        input.message,
+        input.delay
+      );
+
+      if (!started) {
+        return res.status(409).json({ message: "Failed to start mass DM campaign" });
+      }
+
+      res.json({ status: "Mass DM campaign started" });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0].message });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post(api.massDm.stop.path, (req, res) => {
+    botManager.stopMassDm();
+    res.json({ status: "Mass DM campaign stopped" });
+  });
+
+  app.get(api.massDm.status.path, (req, res) => {
+    res.json({ isRunning: botManager.isMassDmRunning() });
   });
 
   app.get(api.logs.list.path, (req, res) => {
