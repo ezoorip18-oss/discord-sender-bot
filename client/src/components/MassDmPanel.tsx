@@ -103,7 +103,7 @@ export function MassDmPanel() {
         {/* Token Section */}
         <div className="space-y-2">
           <label className="text-sm font-medium text-gray-300 flex items-center gap-2">
-            <Key className="w-4 h-4 text-violet-400" /> Discord Token
+            <Key className="w-4 h-4 text-violet-400" /> Bot Token
           </label>
           <div className="flex gap-2">
             <Input

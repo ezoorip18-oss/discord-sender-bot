@@ -4,11 +4,10 @@ import discord
 import asyncio
 import sys
 import json
-import datetime
 
-parser = argparse.ArgumentParser(description='Discord Selfbot - Mass DM')
-parser.add_argument('--token', required=True, help='User Token')
-parser.add_argument('--server', required=True, help='Server/Guild ID or invite code')
+parser = argparse.ArgumentParser(description='Discord Bot - Mass DM')
+parser.add_argument('--token', required=True, help='Bot Token')
+parser.add_argument('--server', required=True, help='Guild ID or invite code')
 parser.add_argument('--dm-message', required=True, help='DM message content')
 parser.add_argument('--delay', type=float, default=3.0, help='Delay between DMs in seconds')
 
@@ -30,8 +29,11 @@ def emit_stats(guild_name, guild_id, sent, failed, skipped, complete=False):
 
 
 class MassDMBot(discord.Client):
-    def __init__(self, server_input, dm_message, delay, *a, **kw):
-        super().__init__(*a, **kw)
+    def __init__(self, server_input, dm_message, delay):
+        intents = discord.Intents.default()
+        intents.members = True      # Privileged intent — must be ON in Dev Portal
+        intents.guilds = True
+        super().__init__(intents=intents)
         self.server_input = server_input.strip()
         self.dm_message = dm_message
         self.delay = delay
@@ -42,45 +44,42 @@ class MassDMBot(discord.Client):
         await self.run_mass_dm()
 
     async def resolve_guild(self):
-        """Return a Guild object from a numeric ID or an invite code/URL."""
+        """Return a Guild from a numeric ID or an invite code/URL."""
         raw = self.server_input
 
         if raw.isdigit():
-            # Already a numeric guild ID
-            guild_id = int(raw)
-            guild = self.get_guild(guild_id)
+            guild = self.get_guild(int(raw))
             if not guild:
                 try:
-                    guild = await self.fetch_guild(guild_id)
+                    guild = await self.fetch_guild(int(raw))
                 except Exception as e:
                     print(f'[MassDM] Error fetching guild by ID: {e}')
                     sys.stdout.flush()
                     return None
             return guild
 
-        # Treat as invite code (strip URL parts if present)
-        invite_code = raw.split("?")[0].rstrip("/").split("/")[-1]
-        print(f'[MassDM] Resolving invite code: {invite_code}')
+        # Invite code / URL
+        code = raw.split("?")[0].rstrip("/").split("/")[-1]
+        print(f'[MassDM] Resolving invite code: {code}')
         sys.stdout.flush()
         try:
-            invite = await self.fetch_invite(invite_code)
+            invite = await self.fetch_invite(code)
             guild_id = invite.guild.id
-            guild_name = invite.guild.name
-            print(f'[MassDM] Invite resolved → {guild_name} ({guild_id})')
+            print(f'[MassDM] Invite resolved → {invite.guild.name} ({guild_id})')
             sys.stdout.flush()
             guild = self.get_guild(guild_id)
             if not guild:
                 guild = await self.fetch_guild(guild_id)
             return guild
         except Exception as e:
-            print(f'[MassDM] Error resolving invite "{invite_code}": {e}')
+            print(f'[MassDM] Error resolving invite "{code}": {e}')
             sys.stdout.flush()
             return None
 
     async def run_mass_dm(self):
         guild = await self.resolve_guild()
         if not guild:
-            print('[MassDM] Could not resolve guild. Aborting.')
+            print('[MassDM] Could not resolve guild. Make sure the bot is in the server.')
             sys.stdout.flush()
             await self.close()
             return
@@ -92,6 +91,11 @@ class MassDMBot(discord.Client):
 
         try:
             members = [m async for m in guild.fetch_members(limit=None)]
+        except discord.Forbidden:
+            print('[MassDM] Cannot fetch members — enable Server Members Intent in the Discord Developer Portal.')
+            sys.stdout.flush()
+            await self.close()
+            return
         except Exception as e:
             print(f'[MassDM] Error fetching members: {e}')
             sys.stdout.flush()

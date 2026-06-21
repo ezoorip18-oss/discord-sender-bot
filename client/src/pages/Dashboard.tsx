@@ -16,7 +16,7 @@ export default function Dashboard() {
           </div>
           <div>
             <h1 className="text-3xl font-bold tracking-tight">Spectre</h1>
-            <p className="text-muted-foreground text-sm">Mass DM Control Panel</p>
+            <p className="text-muted-foreground text-sm">Discord Bot · Mass DM Panel</p>
           </div>
         </header>
 
