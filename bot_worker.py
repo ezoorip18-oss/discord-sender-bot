@@ -2,7 +2,7 @@
 """
 bot_worker.py  —  Discord bot worker for one DM rotation.
 
-Receives:
+CLI args:
   --token        Bot token
   --campaign-id  Campaign ID in DB
   --bot-run-id   BotRun ID in DB
@@ -10,13 +10,9 @@ Receives:
   --quota        Max DMs to send before stopping
   --delay        Seconds between DMs (float)
 
-Flow:
-  1. Connect to Discord
-  2. Verify it's in the guild (retry up to 30s)
-  3. Claim pending members from DB (atomic UPDATE … FOR UPDATE SKIP LOCKED)
-  4. Send DMs, update DB per-member
-  5. Leave guild
-  6. Exit
+Env vars:
+  DATABASE_URL   PostgreSQL connection string
+  DM_MESSAGE     JSON payload string (content / embed / buttons)
 """
 
 import argparse
@@ -57,7 +53,6 @@ def emit_progress(sent, failed, skipped):
 # ── DB helpers ─────────────────────────────────────────────────────────────
 
 def claim_members(conn, campaign_id: int, bot_run_id: int, quota: int):
-    """Atomically claim up to `quota` pending members; returns list of (id, user_id, username)."""
     with conn.cursor() as cur:
         cur.execute("""
             UPDATE campaign_members
@@ -78,30 +73,96 @@ def claim_members(conn, campaign_id: int, bot_run_id: int, quota: int):
 
 def mark_member(conn, member_id: int, status: str):
     with conn.cursor() as cur:
-        cur.execute(
-            "UPDATE campaign_members SET status = %s WHERE id = %s",
-            (status, member_id)
-        )
+        cur.execute("UPDATE campaign_members SET status = %s WHERE id = %s", (status, member_id))
         conn.commit()
 
 
 def finish_run(conn, bot_run_id: int, sent: int, failed: int, skipped: int):
     with conn.cursor() as cur:
         cur.execute("""
-            UPDATE bot_runs
-            SET status = 'completed', sent = %s, failed = %s, skipped = %s,
-                completed_at = %s
-            WHERE id = %s
+            UPDATE bot_runs SET status = 'completed', sent = %s, failed = %s, skipped = %s,
+                completed_at = %s WHERE id = %s
         """, (sent, failed, skipped, datetime.datetime.utcnow().isoformat(), bot_run_id))
         conn.commit()
 
 
 def start_run(conn, bot_run_id: int):
     with conn.cursor() as cur:
-        cur.execute("""
-            UPDATE bot_runs SET status = 'running', started_at = %s WHERE id = %s
-        """, (datetime.datetime.utcnow().isoformat(), bot_run_id))
+        cur.execute("UPDATE bot_runs SET status = 'running', started_at = %s WHERE id = %s",
+                    (datetime.datetime.utcnow().isoformat(), bot_run_id))
         conn.commit()
+
+
+# ── Build discord.py embed + view from JSON payload ──────────────────────
+def parse_dm_payload(raw: str):
+    """
+    Returns (content, embed, view) from DM_MESSAGE env var.
+    Supports plain text fallback and JSON with embed/buttons.
+    """
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return raw, None, None  # plain text fallback
+
+    if isinstance(payload, str):
+        return payload, None, None
+
+    content = payload.get("content") or None
+    embed   = None
+    view    = None
+
+    if "embed" in payload:
+        e = payload["embed"]
+
+        # color
+        color_raw = e.get("color", 0x5865F2)
+        color_int = color_raw if isinstance(color_raw, int) else int(str(color_raw).replace("#", ""), 16)
+
+        emb = discord.Embed(color=color_int)
+        if e.get("title"):       emb.title       = e["title"]
+        if e.get("url"):         emb.url         = e["url"]
+        if e.get("description"): emb.description = e["description"]
+        if e.get("timestamp"):   emb.timestamp   = datetime.datetime.utcnow()
+
+        author = e.get("author") or {}
+        if author.get("name"):
+            emb.set_author(
+                name=author["name"],
+                url=author.get("url") or discord.utils.MISSING,
+                icon_url=author.get("icon_url") or discord.utils.MISSING,
+            )
+
+        footer = e.get("footer") or {}
+        if footer.get("text"):
+            emb.set_footer(
+                text=footer["text"],
+                icon_url=footer.get("icon_url") or discord.utils.MISSING,
+            )
+
+        if e.get("image"):     emb.set_image(url=e["image"])
+        if e.get("thumbnail"): emb.set_thumbnail(url=e["thumbnail"])
+
+        for field in (e.get("fields") or []):
+            emb.add_field(
+                name=field.get("name", "\u200b"),
+                value=field.get("value", "\u200b"),
+                inline=field.get("inline", False),
+            )
+
+        embed = emb
+
+    buttons = payload.get("buttons") or []
+    if buttons:
+        view = discord.ui.View()
+        for btn in buttons[:5]:
+            if btn.get("label") and btn.get("url"):
+                view.add_item(discord.ui.Button(
+                    label=btn["label"][:80],
+                    url=btn["url"],
+                    style=discord.ButtonStyle.link,
+                ))
+
+    return content, embed, view
 
 
 # ── Discord bot ────────────────────────────────────────────────────────────
@@ -110,7 +171,7 @@ class WorkerBot(discord.Client):
     def __init__(self, campaign_id, bot_run_id, guild_id, quota, delay):
         intents = discord.Intents.default()
         intents.members = True
-        intents.guilds = True
+        intents.guilds  = True
         super().__init__(intents=intents)
         self.campaign_id = campaign_id
         self.bot_run_id  = bot_run_id
@@ -123,18 +184,18 @@ class WorkerBot(discord.Client):
         await self.run_campaign()
 
     async def get_guild_with_retry(self):
-        for attempt in range(6):  # up to 30 seconds
+        for attempt in range(6):
             guild = self.get_guild(self.guild_id)
             if guild:
                 return guild
-            log(f"[Worker] Not in guild yet, retrying ({attempt+1}/6)...")
+            log(f"[Worker] Not in guild yet, retrying ({attempt+1}/6)…")
             await asyncio.sleep(5)
         return None
 
     async def run_campaign(self):
         guild = await self.get_guild_with_retry()
         if not guild:
-            log(f"[Worker] ERROR: Bot is not in guild {self.guild_id}. Was it invited?")
+            log(f"[Worker] ERROR: Bot is not in guild {self.guild_id}.")
             await self.close()
             return
 
@@ -144,54 +205,61 @@ class WorkerBot(discord.Client):
         try:
             start_run(conn, self.bot_run_id)
             members = claim_members(conn, self.campaign_id, self.bot_run_id, self.quota)
-            log(f"[Worker] Claimed {len(members)} members to process.")
+            log(f"[Worker] Claimed {len(members)} members.")
 
             sent = failed = skipped = 0
+            dm_raw = os.environ.get("DM_MESSAGE", "")
+            content, embed, view = parse_dm_payload(dm_raw)
 
             for (member_id, user_id, username) in members:
-                # Fetch the Discord user
                 try:
                     user = await self.fetch_user(int(user_id))
-                except Exception as e:
-                    log(f"[Worker] Could not fetch user {user_id}: {e}")
+                except Exception as exc:
+                    log(f"[Worker] Could not fetch user {user_id}: {exc}")
                     mark_member(conn, member_id, "failed")
                     failed += 1
                     emit_progress(sent, failed, skipped)
                     continue
 
-                # Skip bots
                 if user.bot:
                     mark_member(conn, member_id, "skipped")
                     skipped += 1
                     emit_progress(sent, failed, skipped)
                     continue
 
-                # Send DM
                 try:
-                    await user.send(self._dm_message)
+                    # discord.py ignores None for content/embed/view
+                    await user.send(
+                        content=content,
+                        embed=embed,
+                        view=view,
+                    )
                     mark_member(conn, member_id, "sent")
                     sent += 1
-                    log(f"[Worker] DM sent to {user} [{sent}s/{failed}e/{skipped}sk]")
+                    log(f"[Worker] ✓ DM → {user}  [{sent}s/{failed}e/{skipped}sk]")
                     emit_progress(sent, failed, skipped)
                     await asyncio.sleep(self.delay)
+
                 except discord.Forbidden:
                     mark_member(conn, member_id, "failed")
                     failed += 1
-                    log(f"[Worker] Cannot DM {user} (blocked/DMs off)")
+                    log(f"[Worker] ✗ Cannot DM {user} (DMs off/blocked)")
                     emit_progress(sent, failed, skipped)
-                except discord.HTTPException as e:
+
+                except discord.HTTPException as exc:
                     mark_member(conn, member_id, "failed")
                     failed += 1
-                    log(f"[Worker] HTTP error for {user}: {e}")
+                    log(f"[Worker] HTTP error for {user}: {exc}")
                     emit_progress(sent, failed, skipped)
-                    if e.status == 429:
-                        wait = getattr(e, "retry_after", 30)
+                    if exc.status == 429:
+                        wait = getattr(exc, "retry_after", 30)
                         log(f"[Worker] Rate limited — waiting {wait}s")
                         await asyncio.sleep(wait)
-                except Exception as e:
+
+                except Exception as exc:
                     mark_member(conn, member_id, "failed")
                     failed += 1
-                    log(f"[Worker] Error DMing {user}: {e}")
+                    log(f"[Worker] Error DMing {user}: {exc}")
                     emit_progress(sent, failed, skipped)
 
             finish_run(conn, self.bot_run_id, sent, failed, skipped)
@@ -200,19 +268,13 @@ class WorkerBot(discord.Client):
         finally:
             conn.close()
 
-        # Leave the guild
         try:
             await guild.leave()
             log(f"[Worker] Left guild {guild.name}")
-        except Exception as e:
-            log(f"[Worker] Could not leave guild: {e}")
+        except Exception as exc:
+            log(f"[Worker] Could not leave guild: {exc}")
 
         await self.close()
-
-    # The DM message is injected by the manager via env var to avoid shell-escaping issues
-    @property
-    def _dm_message(self):
-        return os.environ.get("DM_MESSAGE", "")
 
 
 try:
@@ -224,6 +286,6 @@ try:
         delay=args.delay,
     )
     bot.run(args.token)
-except Exception as e:
-    log(f"Fatal error: {e}")
+except Exception as exc:
+    log(f"Fatal error: {exc}")
     sys.exit(1)

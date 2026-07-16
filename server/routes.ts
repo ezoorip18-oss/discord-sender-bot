@@ -5,6 +5,7 @@ import { z } from "zod";
 import * as store from "./storage";
 import { campaignManager } from "./campaignManager";
 import { insertBotPoolSchema } from "@shared/schema";
+import { z as _z } from "zod";
 
 const campaignStartInput = z.object({
   serverInput: z.string().min(1, "Server ID or invite link required"),
@@ -90,6 +91,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/campaign/:id/runs", async (req, res) => {
     const runs = await store.getBotRuns(Number(req.params.id));
     res.json(runs);
+  });
+
+  // ── Templates ─────────────────────────────────────────────────────────
+  app.get("/api/templates", async (_req, res) => {
+    res.json(await store.getTemplates());
+  });
+
+  app.post("/api/templates", async (req, res) => {
+    try {
+      const { name, payload } = z.object({
+        name: z.string().min(1),
+        payload: z.string().min(1),
+      }).parse(req.body);
+      const t = await store.saveTemplate(name, payload);
+      res.json(t);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/templates/:id", async (req, res) => {
+    await store.deleteTemplate(Number(req.params.id));
+    res.json({ ok: true });
   });
 
   // ── Logs ──────────────────────────────────────────────────────────────

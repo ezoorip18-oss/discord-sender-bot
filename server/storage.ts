@@ -1,10 +1,10 @@
 
 import { db } from "./db";
 import {
-  botConfig, botPool, campaigns, campaignMembers, botRuns, settings,
+  botConfig, botPool, campaigns, campaignMembers, botRuns, settings, templates,
   type BotPool, type InsertBotPool,
   type Campaign, type InsertCampaign,
-  type CampaignMember, type BotRun, type Settings,
+  type CampaignMember, type BotRun, type Settings, type Template,
 } from "@shared/schema";
 import { eq, and, sql } from "drizzle-orm";
 
@@ -66,6 +66,20 @@ export async function updateBotStatus(id: number, status: string): Promise<void>
 // Reset exhausted/working bots back to available
 export async function resetBotStatuses(): Promise<void> {
   await db.update(botPool).set({ status: "available" });
+}
+
+// ── Templates ─────────────────────────────────────────────────────────────
+export async function getTemplates(): Promise<Template[]> {
+  return db.select().from(templates).orderBy(templates.id);
+}
+export async function saveTemplate(name: string, payload: string): Promise<Template> {
+  const [row] = await db.insert(templates).values({
+    name, payload, createdAt: new Date().toISOString(),
+  }).returning();
+  return row;
+}
+export async function deleteTemplate(id: number): Promise<void> {
+  await db.delete(templates).where(eq(templates.id, id));
 }
 
 // ── Campaigns ─────────────────────────────────────────────────────────────

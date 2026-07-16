@@ -80,3 +80,15 @@ export const settings = pgTable("settings", {
 });
 
 export type Settings = typeof settings.$inferSelect;
+
+// ── Embed Templates ────────────────────────────────────────────────────────
+export const templates = pgTable("templates", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  payload: text("payload").notNull(), // JSON string (embed + buttons payload)
+  createdAt: text("created_at"),
+});
+
+export const insertTemplateSchema = createInsertSchema(templates).omit({ id: true, createdAt: true });
+export type Template = typeof templates.$inferSelect;
+export type InsertTemplate = z.infer<typeof insertTemplateSchema>;

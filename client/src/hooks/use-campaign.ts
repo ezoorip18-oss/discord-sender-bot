@@ -7,6 +7,7 @@ const Q = {
   bots:      "/api/bots",
   active:    "/api/campaign/active",
   logs:      "/api/logs",
+  templates: "/api/templates",
 };
 
 async function api<T>(url: string, opts?: RequestInit): Promise<T> {
@@ -122,6 +123,34 @@ export function useStopCampaign() {
       qc.invalidateQueries({ queryKey: [Q.active] });
       toast({ title: "Campaign Stopped", className: "bg-zinc-700 text-white border-none" });
     },
+  });
+}
+
+// ── Templates ──────────────────────────────────────────────────────────────
+export function useTemplates() {
+  return useQuery({
+    queryKey: [Q.templates],
+    queryFn: () => api<Array<{ id: number; name: string; payload: string; createdAt?: string }>>(Q.templates),
+  });
+}
+export function useSaveTemplate() {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  return useMutation({
+    mutationFn: (data: { name: string; payload: string }) =>
+      api("/api/templates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [Q.templates] });
+      toast({ title: "Template Saved", className: "bg-green-600 text-white border-none" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+}
+export function useDeleteTemplate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api(`/api/templates/${id}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: [Q.templates] }),
   });
 }
 
