@@ -1,0 +1,1 @@
+- [Bot rotation architecture](bot-rotation.md) — selfbot token invites bots via raw Discord HTTP; bot_worker.py uses psycopg2 + discord.py for DM rotation

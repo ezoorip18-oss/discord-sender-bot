@@ -1,102 +1,100 @@
 
 import type { Express } from "express";
 import type { Server } from "http";
-import { storage } from "./storage";
-import { botManager } from "./botManager";
-import { api } from "@shared/routes";
 import { z } from "zod";
+import * as store from "./storage";
+import { campaignManager } from "./campaignManager";
+import { insertBotPoolSchema } from "@shared/schema";
 
-export async function registerRoutes(
-  httpServer: Server,
-  app: Express
-): Promise<Server> {
+const campaignStartInput = z.object({
+  serverInput: z.string().min(1, "Server ID or invite link required"),
+  dmMessage:   z.string().min(1, "Message required"),
+  botQuota:    z.number().int().min(1).max(10000).default(500),
+  delay:       z.number().int().min(1).max(60).default(3),
+});
 
-  // ── Token ──────────────────────────────────────────────
-  app.get(api.token.get.path, async (req, res) => {
-    const config = await storage.getConfig();
-    res.json({ token: config?.token ?? "" });
+export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
+
+  // ── Settings ──────────────────────────────────────────────────────────
+  app.get("/api/settings", async (_req, res) => {
+    const s = await store.getSettings();
+    res.json({ selfbotToken: s?.selfbotToken ?? "" });
   });
 
-  app.post(api.token.save.path, async (req, res) => {
+  app.post("/api/settings", async (req, res) => {
     try {
-      const { token } = api.token.save.input.parse(req.body);
-      const existing = await storage.getConfig();
-      if (existing) {
-        await storage.updateConfig({
-          token,
-          channelId: existing.channelId,
-          message: existing.message,
-          cooldown: existing.cooldown,
-          isRunning: existing.isRunning,
-        });
-      } else {
-        await storage.updateConfig({
-          token,
-          channelId: "",
-          message: "",
-          cooldown: 60,
-          isRunning: false,
-        });
-      }
+      const { selfbotToken } = z.object({ selfbotToken: z.string().min(1) }).parse(req.body);
+      await store.saveSelfbotToken(selfbotToken);
       res.json({ ok: true });
-    } catch (err) {
-      if (err instanceof z.ZodError) {
-        return res.status(400).json({ message: err.errors[0].message });
-      }
-      res.status(500).json({ message: "Internal server error" });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
     }
   });
 
-  // ── Mass DM ────────────────────────────────────────────
-  app.post(api.massDm.start.path, async (req, res) => {
+  // ── Bot Pool ──────────────────────────────────────────────────────────
+  app.get("/api/bots", async (_req, res) => {
+    const bots = await store.getBots();
+    // Never send tokens to the client
+    res.json(bots.map(b => ({ id: b.id, clientId: b.clientId, name: b.name, status: b.status })));
+  });
+
+  app.post("/api/bots", async (req, res) => {
     try {
-      const input = api.massDm.start.input.parse(req.body);
-
-      if (botManager.isRunning()) {
-        return res.status(409).json({ message: "A mass DM campaign is already running" });
-      }
-
-      const config = await storage.getConfig();
-      if (!config || !config.token) {
-        return res.status(400).json({ message: "Bot token not configured. Set it above first." });
-      }
-
-      const started = botManager.startMassDm(
-        config.token,
-        input.serverId,
-        input.message,
-        input.delay,
-      );
-
-      if (!started) {
-        return res.status(409).json({ message: "Failed to start mass DM campaign" });
-      }
-
-      res.json({ status: "Mass DM campaign started" });
-    } catch (err) {
-      if (err instanceof z.ZodError) {
-        return res.status(400).json({ message: err.errors[0].message });
-      }
-      res.status(500).json({ message: "Internal server error" });
+      const data = insertBotPoolSchema.parse(req.body);
+      const bot = await store.addBot(data);
+      res.json({ id: bot.id, clientId: bot.clientId, name: bot.name, status: bot.status });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
     }
   });
 
-  app.post(api.massDm.stop.path, (req, res) => {
-    botManager.stopMassDm();
-    res.json({ status: "Mass DM campaign stopped" });
+  app.delete("/api/bots/:id", async (req, res) => {
+    await store.removeBot(Number(req.params.id));
+    res.json({ ok: true });
   });
 
-  app.get(api.massDm.status.path, (req, res) => {
-    res.json({ isRunning: botManager.isRunning() });
+  app.post("/api/bots/reset", async (_req, res) => {
+    await store.resetBotStatuses();
+    res.json({ ok: true });
   });
 
-  app.get(api.massDm.stats.path, (req, res) => {
-    res.json(botManager.getMassDmStats());
+  // ── Campaign ──────────────────────────────────────────────────────────
+  app.post("/api/campaign/start", async (req, res) => {
+    try {
+      const { serverInput, dmMessage, botQuota, delay } = campaignStartInput.parse(req.body);
+      const campaignId = await campaignManager.startCampaign(serverInput, dmMessage, botQuota, delay);
+      res.json({ campaignId, status: "initializing" });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
   });
 
-  // ── Logs ───────────────────────────────────────────────
-  app.get(api.logs.list.path, (req, res) => {
-    res.json(botManager.getLogs());
+  app.post("/api/campaign/stop", (_req, res) => {
+    campaignManager.stopCampaign();
+    res.json({ ok: true });
+  });
+
+  app.get("/api/campaign/active", async (_req, res) => {
+    const campaign = await store.getActiveCampaign();
+    if (!campaign) return res.json(null);
+    const stats = await store.getCampaignMemberStats(campaign.id);
+    const runs  = await store.getBotRuns(campaign.id);
+    res.json({ ...campaign, stats, runs });
+  });
+
+  app.get("/api/campaign/:id/stats", async (req, res) => {
+    const stats = await store.getCampaignMemberStats(Number(req.params.id));
+    res.json(stats);
+  });
+
+  app.get("/api/campaign/:id/runs", async (req, res) => {
+    const runs = await store.getBotRuns(Number(req.params.id));
+    res.json(runs);
+  });
+
+  // ── Logs ──────────────────────────────────────────────────────────────
+  app.get("/api/logs", (_req, res) => {
+    res.json(campaignManager.getLogs());
   });
 
   return httpServer;
