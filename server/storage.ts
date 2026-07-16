@@ -34,11 +34,12 @@ export async function getSettings(): Promise<Settings | undefined> {
   return rows[0];
 }
 export async function saveSelfbotToken(token: string): Promise<void> {
+  const trimmed = token.trim();
   const existing = await getSettings();
   if (existing) {
-    await db.update(settings).set({ selfbotToken: token }).where(eq(settings.id, existing.id));
+    await db.update(settings).set({ selfbotToken: trimmed }).where(eq(settings.id, existing.id));
   } else {
-    await db.insert(settings).values({ selfbotToken: token });
+    await db.insert(settings).values({ selfbotToken: trimmed });
   }
 }
 

@@ -160,7 +160,16 @@ class CampaignManager {
     const s = await storage.getSettings();
     if (!s?.selfbotToken) throw new Error("Selfbot token not configured in Setup");
 
-    const selfbotToken = s.selfbotToken;
+    const selfbotToken = s.selfbotToken.trim();
+
+    // Validate token first
+    this.addLog("Validating selfbot token...", "info");
+    try {
+      const me: any = await this.discordGet("/users/@me", selfbotToken);
+      this.addLog(`Authenticated as: ${me.username}#${me.discriminator ?? "0"}`, "success");
+    } catch (err: any) {
+      throw new Error(`Invalid selfbot token — Discord rejected it: ${err.message}. Re-paste your token in the Setup tab.`);
+    }
 
     // Resolve guild
     this.addLog("Resolving server...", "info");
