@@ -205,19 +205,18 @@ class CampaignManager {
     delay: number,
   ) {
     try {
-      // Step 1: Fetch all members
-      this.addLog("Fetching member list from server...", "info");
-      const members = await this.fetchAllMembers(guildId, selfbotToken);
-      this.addLog(`Fetched ${members.length} human members. Storing in database...`, "info");
-      await storage.storeCampaignMembers(campaignId, members);
-      await storage.updateCampaignStatus(campaignId, "running", { totalMembers: members.length });
-      this.addLog(`Campaign initialized. Starting bot rotation...`, "success");
+      // Members are fetched by the first bot worker after it joins the guild.
+      // (Discord blocks GET /guilds/{id}/members for user tokens via REST.)
+      await storage.updateCampaignStatus(campaignId, "running");
+      this.addLog("Starting bot rotation — first bot will fetch the member list after joining.", "info");
 
-      // Step 2: Bot rotation loop
+      // Bot rotation loop
       let rotationNum = 0;
       while (!this.stopping) {
         const pending = await storage.getPendingCount(campaignId);
-        if (pending === 0) {
+        // Only treat pending=0 as "complete" after at least one bot has run
+        // (before first bot runs, members haven't been fetched yet)
+        if (pending === 0 && rotationNum > 0) {
           this.addLog("All members processed. Campaign complete!", "success");
           await storage.updateCampaignStatus(campaignId, "completed");
           break;

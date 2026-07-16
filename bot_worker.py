@@ -192,6 +192,48 @@ class WorkerBot(discord.Client):
             await asyncio.sleep(5)
         return None
 
+    async def fetch_and_store_members(self, conn, guild):
+        """Fetch all human members via gateway and store in DB (only if not already done)."""
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM campaign_members WHERE campaign_id = %s", (self.campaign_id,))
+            existing = cur.fetchone()[0]
+
+        if existing > 0:
+            log(f"[Worker] Members already in DB ({existing}), skipping fetch.")
+            return existing
+
+        log(f"[Worker] Fetching all members from {guild.name}… (requires Server Members Intent)")
+        rows = []
+        try:
+            async for member in guild.fetch_members(limit=None):
+                if not member.bot:
+                    rows.append((self.campaign_id, str(member.id), member.name or str(member.id), "pending"))
+        except discord.Forbidden:
+            log("[Worker] ERROR: Missing Server Members Intent — enable it in the Developer Portal for this bot.")
+            return 0
+        except Exception as exc:
+            log(f"[Worker] ERROR fetching members: {exc}")
+            return 0
+
+        if not rows:
+            log("[Worker] No human members found.")
+            return 0
+
+        with conn.cursor() as cur:
+            psycopg2.extras.execute_values(cur, """
+                INSERT INTO campaign_members (campaign_id, user_id, username, status)
+                VALUES %s
+                ON CONFLICT DO NOTHING
+            """, rows)
+            conn.commit()
+
+        with conn.cursor() as cur:
+            cur.execute("UPDATE campaigns SET total_members = %s WHERE id = %s", (len(rows), self.campaign_id))
+            conn.commit()
+
+        log(f"[Worker] Stored {len(rows)} members in DB.")
+        return len(rows)
+
     async def run_campaign(self):
         guild = await self.get_guild_with_retry()
         if not guild:
@@ -204,6 +246,15 @@ class WorkerBot(discord.Client):
         conn = get_db()
         try:
             start_run(conn, self.bot_run_id)
+
+            # Fetch + store members (first bot does this; subsequent bots skip it)
+            member_count = await self.fetch_and_store_members(conn, guild)
+            if member_count == 0:
+                log("[Worker] No members to DM. Exiting.")
+                finish_run(conn, self.bot_run_id, 0, 0, 0)
+                await self.close()
+                return
+
             members = claim_members(conn, self.campaign_id, self.bot_run_id, self.quota)
             log(f"[Worker] Claimed {len(members)} members.")
 
