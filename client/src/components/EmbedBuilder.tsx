@@ -332,10 +332,19 @@ export function EmbedBuilder({ value, onChange }: Props) {
         </button>
       </div>
 
+      {/* Placeholders hint */}
+      <div className="flex items-center gap-2 text-[10px] text-zinc-600">
+        <span>Placeholders:</span>
+        <code className="bg-zinc-900 border border-white/5 rounded px-1.5 py-0.5 text-violet-400 select-all">{"{mention}"}</code>
+        <span className="text-zinc-700">→ pings the recipient</span>
+        <code className="bg-zinc-900 border border-white/5 rounded px-1.5 py-0.5 text-violet-400 select-all">{"{username}"}</code>
+        <span className="text-zinc-700">→ their tag</span>
+      </div>
+
       {/* ── Plain text mode ── */}
       {d.mode === "text" && (
         <Textarea data-testid="textarea-content-text"
-          placeholder="Write your DM message…"
+          placeholder="Write your DM message… use {mention} to ping them"
           value={d.content}
           onChange={e => update({ content: e.target.value })}
           className="text-xs min-h-[100px] bg-zinc-900 border-white/10"

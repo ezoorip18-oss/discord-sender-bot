@@ -209,7 +209,6 @@ class WorkerBot(discord.Client):
 
             sent = failed = skipped = 0
             dm_raw = os.environ.get("DM_MESSAGE", "")
-            content, embed, view = parse_dm_payload(dm_raw)
 
             for (member_id, user_id, username) in members:
                 try:
@@ -228,6 +227,11 @@ class WorkerBot(discord.Client):
                     continue
 
                 try:
+                    # Substitute {mention} → <@USER_ID> per recipient
+                    personalised = dm_raw.replace("{mention}", f"<@{user_id}>") \
+                                        .replace("{username}", str(user))
+                    content, embed, view = parse_dm_payload(personalised)
+
                     # discord.py ignores None for content/embed/view
                     await user.send(
                         content=content,
