@@ -1,4 +1,3 @@
-
 """
 bot_worker.py  —  Discord bot worker for one DM rotation.
 
@@ -9,6 +8,7 @@ CLI args:
   --guild-id     Target guild (numeric ID)
   --quota        Max DMs to send before stopping
   --delay        Seconds between DMs (float)
+  --skip-leave   If set, bot does not leave the guild after finishing
 
 Env vars:
   DATABASE_URL   PostgreSQL connection string
@@ -94,12 +94,10 @@ def start_run(conn, bot_run_id: int):
         conn.commit()
 
 
-# ── Build discord.py embed + view from JSON payload ──────────────────────
+# ── Build discord.py embed + view from JSON payload ────────────────────────
+
 def parse_dm_payload(raw: str):
-    """
-    Returns (content, embed, view) from DM_MESSAGE env var.
-    Supports plain text fallback and JSON with embed/buttons.
-    """
+    """Returns (content, embed, view) from DM_MESSAGE env var."""
     try:
         payload = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
@@ -115,7 +113,6 @@ def parse_dm_payload(raw: str):
     if "embed" in payload:
         e = payload["embed"]
 
-        # color
         color_raw = e.get("color", 0x5865F2)
         color_int = color_raw if isinstance(color_raw, int) else int(str(color_raw).replace("#", ""), 16)
 
@@ -211,7 +208,7 @@ class WorkerBot(discord.Client):
                 if not member.bot:
                     rows.append((self.campaign_id, str(member.id), member.name or str(member.id), "pending"))
         except discord.Forbidden:
-            log("[Worker] ERROR: Missing Server Members Intent — enable it in the Developer Portal for this bot.")
+            log("[Worker] ERROR: Missing Server Members Intent — enable it in the Developer Portal.")
             return 0
         except Exception as exc:
             log(f"[Worker] ERROR fetching members: {exc}")
@@ -224,8 +221,7 @@ class WorkerBot(discord.Client):
         with conn.cursor() as cur:
             psycopg2.extras.execute_values(cur, """
                 INSERT INTO campaign_members (campaign_id, user_id, username, status)
-                VALUES %s
-                ON CONFLICT DO NOTHING
+                VALUES %s ON CONFLICT DO NOTHING
             """, rows)
             conn.commit()
 
@@ -249,7 +245,6 @@ class WorkerBot(discord.Client):
         try:
             start_run(conn, self.bot_run_id)
 
-            # Fetch + store members (first bot does this; subsequent bots skip it)
             member_count = await self.fetch_and_store_members(conn, guild)
             if member_count == 0:
                 log("[Worker] No members to DM. Exiting.")
@@ -280,17 +275,11 @@ class WorkerBot(discord.Client):
                     continue
 
                 try:
-                    # Substitute {mention} → <@USER_ID> per recipient
                     personalised = dm_raw.replace("{mention}", f"<@{user_id}>") \
                                         .replace("{username}", str(user))
                     content, embed, view = parse_dm_payload(personalised)
 
-                    # discord.py ignores None for content/embed/view
-                    await user.send(
-                        content=content,
-                        embed=embed,
-                        view=view,
-                    )
+                    await user.send(content=content, embed=embed, view=view)
                     mark_member(conn, member_id, "sent")
                     sent += 1
                     log(f"[Worker] ✓ DM → {user}  [{sent}s/{failed}e/{skipped}sk]")
