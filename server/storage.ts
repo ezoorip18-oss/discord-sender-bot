@@ -43,6 +43,16 @@ export async function saveSelfbotToken(token: string): Promise<void> {
   }
 }
 
+export async function saveCapsolverKey(key: string): Promise<void> {
+  const trimmed = key.trim();
+  const existing = await getSettings();
+  if (existing) {
+    await db.update(settings).set({ capsolverKey: trimmed }).where(eq(settings.id, existing.id));
+  } else {
+    await db.insert(settings).values({ capsolverKey: trimmed });
+  }
+}
+
 // ── Bot Pool ──────────────────────────────────────────────────────────────
 export async function getBots(): Promise<BotPool[]> {
   return db.select().from(botPool).orderBy(botPool.id);

@@ -20,13 +20,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ── Settings ──────────────────────────────────────────────────────────
   app.get("/api/settings", async (_req, res) => {
     const s = await store.getSettings();
-    res.json({ selfbotToken: s?.selfbotToken ?? "" });
+    res.json({ selfbotToken: s?.selfbotToken ?? "", capsolverKey: s?.capsolverKey ?? "" });
   });
 
   app.post("/api/settings", async (req, res) => {
     try {
       const { selfbotToken } = z.object({ selfbotToken: z.string().min(1) }).parse(req.body);
       await store.saveSelfbotToken(selfbotToken);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/settings/capsolver", async (req, res) => {
+    try {
+      const { key } = z.object({ key: z.string() }).parse(req.body);
+      await store.saveCapsolverKey(key);
       res.json({ ok: true });
     } catch (e: any) {
       res.status(400).json({ message: e.message });

@@ -73,10 +73,11 @@ export const botRuns = pgTable("bot_runs", {
 
 export type BotRun = typeof botRuns.$inferSelect;
 
-// ── Settings (selfbot token) ───────────────────────────────────────────────
+// ── Settings ───────────────────────────────────────────────────────────────
 export const settings = pgTable("settings", {
   id: serial("id").primaryKey(),
   selfbotToken: text("selfbot_token").default("").notNull(),
+  capsolverKey: text("capsolver_key").default("").notNull(),
 });
 
 export type Settings = typeof settings.$inferSelect;

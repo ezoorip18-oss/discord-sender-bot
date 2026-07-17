@@ -77,62 +77,154 @@ class CampaignManager {
     return members;
   }
 
+  private static readonly UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
+
+  private static readonly SUPER_PROPS = Buffer.from(JSON.stringify({
+    os: "Windows", browser: "Chrome", device: "", system_locale: "en-US",
+    browser_user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    browser_version: "125.0.0.0", os_version: "10",
+    referrer: "", referring_domain: "", referrer_current: "", referring_domain_current: "",
+    release_channel: "stable", client_build_number: 312139, client_event_source: null,
+  })).toString("base64");
+
+  /** Fetch a Discord session fingerprint — helps the request look like a real browser session. */
+  private async getFingerprint(): Promise<string | null> {
+    try {
+      const r = await fetch("https://discord.com/api/v10/experiments", {
+        headers: { "User-Agent": CampaignManager.UA },
+      });
+      return r.headers.get("x-fingerprint");
+    } catch { return null; }
+  }
+
+  /**
+   * Solve an hCaptcha challenge via CapSolver (https://capsolver.com).
+   * Returns the captcha token string, or null if solving failed / no key configured.
+   */
+  private async solveCaptcha(sitekey: string, rqdata: string, pageUrl: string): Promise<string | null> {
+    const s = await storage.getSettings();
+    const apiKey = s?.capsolverKey?.trim();
+    if (!apiKey) return null;
+
+    this.addLog("hCaptcha — sending to CapSolver to solve automatically...", "info");
+    try {
+      const createR = await fetch("https://api.capsolver.com/createTask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientKey: apiKey,
+          task: {
+            type: "HCaptchaTaskProxyless",
+            websiteURL: pageUrl,
+            websiteKey: sitekey,
+            ...(rqdata ? { enterprisePayload: { rqdata } } : {}),
+            userAgent: CampaignManager.UA,
+          },
+        }),
+      });
+      const created = await createR.json() as any;
+      if (created.errorId !== 0) {
+        this.addLog(`CapSolver error: ${created.errorDescription}`, "error");
+        return null;
+      }
+
+      // Poll up to 60 s for a solution
+      for (let i = 0; i < 20; i++) {
+        await sleep(3000);
+        const pollR = await fetch("https://api.capsolver.com/getTaskResult", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clientKey: apiKey, taskId: created.taskId }),
+        });
+        const poll = await pollR.json() as any;
+        if (poll.status === "ready") {
+          this.addLog("hCaptcha solved by CapSolver ✓", "success");
+          return poll.solution?.gRecaptchaResponse ?? null;
+        }
+      }
+      this.addLog("CapSolver timed out waiting for solution.", "error");
+      return null;
+    } catch (e: any) {
+      this.addLog(`CapSolver exception: ${e.message}`, "error");
+      return null;
+    }
+  }
+
   private async inviteBot(clientId: string, guildId: string, token: string) {
-    // Small random jitter so requests don't arrive machine-perfectly spaced
+    // Random jitter — machine-perfect timing is a bot signal
     await sleep(1000 + Math.floor(Math.random() * 2000));
 
-    // Mirror headers the real Discord web client sends so the request doesn't
-    // look like raw API access (which is what triggers hCaptcha)
-    const superProps = Buffer.from(JSON.stringify({
-      os: "Windows",
-      browser: "Chrome",
-      device: "",
-      system_locale: "en-US",
-      browser_user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-      browser_version: "125.0.0.0",
-      os_version: "10",
-      referrer: "",
-      referring_domain: "",
-      referrer_current: "",
-      referring_domain_current: "",
-      release_channel: "stable",
-      client_build_number: 312139,
-      client_event_source: null,
+    // X-Context-Properties tells Discord exactly where in the UI the action originates
+    const ctxProps = Buffer.from(JSON.stringify({
+      location: "Join Guild",
+      location_guild_id: guildId,
+      location_channel_id: guildId,
+      location_channel_type: 0,
     })).toString("base64");
 
-    const inviteUrl = `https://discord.com/api/v10/oauth2/authorize?client_id=${clientId}&scope=bot&permissions=0`;
-    const r = await fetch(inviteUrl, {
-      method: "POST",
-      headers: {
-        Authorization: token,
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-        "X-Super-Properties": superProps,
-        "X-Discord-Locale": "en-US",
-        "X-Discord-Timezone": "America/New_York",
-        "Origin": "https://discord.com",
-        "Referer": `https://discord.com/oauth2/authorize?client_id=${clientId}&scope=bot&permissions=0`,
-      },
-      body: JSON.stringify({ authorize: true, guild_id: guildId }),
-    });
+    // Fetch a session fingerprint (Discord uses this to validate browser sessions)
+    const fingerprint = await this.getFingerprint();
+
+    const pageUrl = `https://discord.com/oauth2/authorize?client_id=${clientId}&scope=bot&permissions=0`;
+    const apiUrl  = `https://discord.com/api/v10/oauth2/authorize?client_id=${clientId}&scope=bot&permissions=0`;
+
+    const headers: Record<string, string> = {
+      Authorization:         token,
+      "Content-Type":        "application/json",
+      "User-Agent":          CampaignManager.UA,
+      "X-Super-Properties":  CampaignManager.SUPER_PROPS,
+      "X-Context-Properties": ctxProps,
+      "X-Discord-Locale":    "en-US",
+      "X-Discord-Timezone":  "America/New_York",
+      "X-Debug-Options":     "bugReporterEnabled",
+      "Origin":              "https://discord.com",
+      "Referer":             pageUrl,
+    };
+    if (fingerprint) headers["X-Fingerprint"] = fingerprint;
+
+    const doPost = (captchaKey?: string) =>
+      fetch(apiUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          authorize: true,
+          guild_id: guildId,
+          ...(captchaKey ? { captcha_key: captchaKey } : {}),
+        }),
+      });
+
+    let r = await doPost();
 
     if (!r.ok) {
-      let body = "";
-      try {
-        const json = await r.json();
-        // Discord returns captcha_key when hCaptcha is needed
-        if (json?.captcha_key) {
-          throw new Error(
-            `hCaptcha triggered for client ${clientId}. ` +
-            `Try waiting 5–10 min and retrying, or enable "Bots already in server" mode and add bots manually.`
-          );
+      const json: any = await r.json().catch(() => ({}));
+
+      if (json?.captcha_sitekey) {
+        // Try automatic solving via CapSolver
+        const solution = await this.solveCaptcha(
+          json.captcha_sitekey,
+          json.captcha_rqdata ?? "",
+          pageUrl,
+        );
+
+        if (solution) {
+          r = await doPost(solution);
+          if (r.ok) return; // solved and retried successfully
+          const retryJson: any = await r.json().catch(() => ({}));
+          throw new Error(`Invite failed even after captcha solve: ${r.status} ${JSON.stringify(retryJson)}`);
         }
-        body = JSON.stringify(json);
-      } catch (e: any) {
-        if (e.message.includes("hCaptcha")) throw e;
-        body = await r.text().catch(() => String(r.status));
+
+        // No solver configured / solving failed
+        const s = await storage.getSettings();
+        const hasKey = !!s?.capsolverKey?.trim();
+        throw new Error(
+          `hCaptcha required for client ${clientId}. ` +
+          (hasKey
+            ? "CapSolver could not solve it — check your balance at capsolver.com."
+            : 'Add a CapSolver API key in Setup → "hCaptcha Auto-Solver" to bypass this automatically.')
+        );
       }
-      throw new Error(`Invite failed for client ${clientId}: ${r.status} ${body}`);
+
+      throw new Error(`Invite failed for client ${clientId}: ${r.status} ${JSON.stringify(json)}`);
     }
   }
 

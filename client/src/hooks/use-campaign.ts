@@ -23,7 +23,7 @@ async function api<T>(url: string, opts?: RequestInit): Promise<T> {
 export function useSettings() {
   return useQuery({
     queryKey: [Q.settings],
-    queryFn: () => api<{ selfbotToken: string }>(Q.settings),
+    queryFn: () => api<{ selfbotToken: string; capsolverKey: string }>(Q.settings),
   });
 }
 export function useSaveSettings() {
@@ -35,6 +35,19 @@ export function useSaveSettings() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: [Q.settings] });
       toast({ title: "Saved", description: "Selfbot token updated.", className: "bg-green-600 text-white border-none" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+}
+export function useSaveCapsolverKey() {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  return useMutation({
+    mutationFn: (key: string) =>
+      api("/api/settings/capsolver", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key }) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [Q.settings] });
+      toast({ title: "Saved", description: "CapSolver key saved.", className: "bg-green-600 text-white border-none" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });

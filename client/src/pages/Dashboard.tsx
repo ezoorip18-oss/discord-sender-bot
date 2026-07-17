@@ -1,22 +1,25 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Ghost, Settings, Mail, Key, Save } from "lucide-react";
+import { Ghost, Settings, Mail, Key, Save, ShieldCheck } from "lucide-react";
 import { BotPoolPanel } from "@/components/BotPoolPanel";
 import { CampaignPanel } from "@/components/CampaignPanel";
 import { CampaignStats } from "@/components/CampaignStats";
 import { LogConsole } from "@/components/LogConsole";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/Input";
-import { useSettings, useSaveSettings } from "@/hooks/use-campaign";
+import { useSettings, useSaveSettings, useSaveCapsolverKey } from "@/hooks/use-campaign";
 
 type Tab = "setup" | "campaign";
 
 function SetupPanel() {
   const { data: s } = useSettings();
   const { mutate: save, isPending } = useSaveSettings();
+  const { mutate: saveCapsolver, isPending: isSavingCapsolver } = useSaveCapsolverKey();
   const [token, setToken] = useState("");
+  const [capsolverInput, setCapsolverInput] = useState("");
   const saved = !!s?.selfbotToken;
+  const capsolverSaved = !!s?.capsolverKey;
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
@@ -28,30 +31,66 @@ function SetupPanel() {
         </h3>
         <p className="text-xs text-zinc-500 mt-0.5">The user account already in the target server (used to invite bots + fetch the member list).</p>
       </div>
-      <div className="p-4 space-y-2">
-        <label className="text-xs font-semibold text-zinc-400 flex items-center gap-1.5">
-          <Key className="w-3.5 h-3.5 text-violet-400" /> User Account Token
-        </label>
-        <div className="flex gap-2">
-          <Input
-            data-testid="input-selfbot-token"
-            type="password"
-            placeholder={saved ? "••••••••• (saved)" : "User token..."}
-            value={token}
-            onChange={e => setToken(e.target.value)}
-            className="flex-1 h-9 text-sm"
-          />
-          <Button
-            data-testid="button-save-settings"
-            onClick={() => { if (token.trim()) { save(token.trim()); setToken(""); } }}
-            disabled={isPending || !token.trim()}
-            className="h-9 px-3 bg-violet-600 hover:bg-violet-500 text-white shrink-0"
-          >
-            <Save className="w-3.5 h-3.5" />
-          </Button>
+      <div className="p-4 space-y-4">
+        {/* Selfbot token */}
+        <div className="space-y-2">
+          <label className="text-xs font-semibold text-zinc-400 flex items-center gap-1.5">
+            <Key className="w-3.5 h-3.5 text-violet-400" /> User Account Token
+          </label>
+          <div className="flex gap-2">
+            <Input
+              data-testid="input-selfbot-token"
+              type="password"
+              placeholder={saved ? "••••••••• (saved)" : "User token..."}
+              value={token}
+              onChange={e => setToken(e.target.value)}
+              className="flex-1 h-9 text-sm"
+            />
+            <Button
+              data-testid="button-save-settings"
+              onClick={() => { if (token.trim()) { save(token.trim()); setToken(""); } }}
+              disabled={isPending || !token.trim()}
+              className="h-9 px-3 bg-violet-600 hover:bg-violet-500 text-white shrink-0"
+            >
+              <Save className="w-3.5 h-3.5" />
+            </Button>
+          </div>
+          {saved && <p className="text-xs text-green-500/80">✓ Token saved</p>}
+          <p className="text-xs text-zinc-600">This account must have <strong className="text-zinc-400">Manage Server</strong> permissions in the target server.</p>
         </div>
-        {saved && <p className="text-xs text-green-500/80">✓ Token saved</p>}
-        <p className="text-xs text-zinc-600">This account must have <strong className="text-zinc-400">Manage Server</strong> permissions in the target server.</p>
+
+        {/* CapSolver key */}
+        <div className="space-y-2 pt-2 border-t border-white/5">
+          <label className="text-xs font-semibold text-zinc-400 flex items-center gap-1.5">
+            <ShieldCheck className="w-3.5 h-3.5 text-violet-400" /> hCaptcha Auto-Solver
+          </label>
+          <div className="flex gap-2">
+            <Input
+              data-testid="input-capsolver-key"
+              type="password"
+              placeholder={capsolverSaved ? "••••••••• (saved)" : "CapSolver API key..."}
+              value={capsolverInput}
+              onChange={e => setCapsolverInput(e.target.value)}
+              className="flex-1 h-9 text-sm"
+            />
+            <Button
+              data-testid="button-save-capsolver"
+              onClick={() => { saveCapsolver(capsolverInput.trim()); setCapsolverInput(""); }}
+              disabled={isSavingCapsolver || !capsolverInput.trim()}
+              className="h-9 px-3 bg-violet-600 hover:bg-violet-500 text-white shrink-0"
+            >
+              <Save className="w-3.5 h-3.5" />
+            </Button>
+          </div>
+          {capsolverSaved
+            ? <p className="text-xs text-green-500/80">✓ CapSolver key saved — hCaptcha will be solved automatically</p>
+            : <p className="text-xs text-zinc-600">
+                Get a free key at{" "}
+                <a href="https://capsolver.com" target="_blank" rel="noreferrer" className="text-violet-400 hover:underline">capsolver.com</a>
+                {" "}— if Discord triggers hCaptcha on invite, it'll be solved automatically.
+              </p>
+          }
+        </div>
       </div>
     </motion.div>
   );
