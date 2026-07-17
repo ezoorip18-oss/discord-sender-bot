@@ -4,7 +4,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { motion } from "framer-motion";
-import { Mail, Server, Users, Timer, Play, Square } from "lucide-react";
+import { Mail, Server, Users, Timer, Play, Square, ShieldOff } from "lucide-react";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Button } from "@/components/ui/button";
 import { Input } from "./Input";
@@ -16,6 +16,7 @@ const schema = z.object({
   dmMessage:   z.string().min(2, "Message required"),
   botQuota:    z.number().int().min(1).max(10000),
   delay:       z.number().int().min(1).max(60),
+  skipInvite:  z.boolean(),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -29,11 +30,11 @@ export function CampaignPanel() {
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { serverInput: "", dmMessage: "{}", botQuota: 500, delay: 3 },
+    defaultValues: { serverInput: "", dmMessage: "{}", botQuota: 500, delay: 3, skipInvite: false },
   });
 
   const onSubmit = (data: FormValues) => {
-    start({ serverInput: data.serverInput, dmMessage: data.dmMessage, botQuota: data.botQuota, delay: data.delay });
+    start({ serverInput: data.serverInput, dmMessage: data.dmMessage, botQuota: data.botQuota, delay: data.delay, skipInvite: data.skipInvite });
   };
 
   return (
@@ -108,6 +109,30 @@ export function CampaignPanel() {
                 </FormItem>
               )} />
             </div>
+
+            {/* Skip invite toggle */}
+            <FormField control={form.control} name="skipInvite" render={({ field }) => (
+              <FormItem>
+                <label data-testid="toggle-skip-invite"
+                  className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                    field.value
+                      ? "border-violet-500/40 bg-violet-500/10"
+                      : "border-white/5 bg-zinc-900/40 hover:border-white/10"
+                  }`}>
+                  <input type="checkbox" checked={field.value} onChange={field.onChange}
+                    className="accent-violet-600 mt-0.5 w-3.5 h-3.5 shrink-0" />
+                  <div>
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-200">
+                      <ShieldOff className="w-3.5 h-3.5 text-violet-400" />
+                      Bots already in server (skip auto-invite)
+                    </div>
+                    <div className="text-[10px] text-zinc-500 mt-0.5">
+                      Use this if Discord's hCaptcha blocks the invite step. Manually add all bots to the server first, then enable this.
+                    </div>
+                  </div>
+                </label>
+              </FormItem>
+            )} />
 
             {/* Embed builder — replaces plain message textarea */}
             <FormField control={form.control} name="dmMessage" render={({ field }) => (

@@ -104,7 +104,7 @@ export function useStartCampaign() {
   const qc = useQueryClient();
   const { toast } = useToast();
   return useMutation({
-    mutationFn: (data: { serverInput: string; dmMessage: string; botQuota: number; delay: number }) =>
+    mutationFn: (data: { serverInput: string; dmMessage: string; botQuota: number; delay: number; skipInvite?: boolean }) =>
       api<{ campaignId: number }>("/api/campaign/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: [Q.active] });

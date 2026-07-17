@@ -102,10 +102,11 @@ class CampaignManager {
     delay: number,
     dmMessage: string,
     dbUrl: string,
+    skipLeave = false,
   ): Promise<number | null> {
     return new Promise((resolve) => {
       const workerPath = path.resolve(process.cwd(), "bot_worker.py");
-      const proc = spawn("python3", [
+      const args = [
         workerPath,
         "--token",       botToken,
         "--campaign-id", String(campaignId),
@@ -113,7 +114,9 @@ class CampaignManager {
         "--guild-id",    String(guildId),
         "--quota",       String(quota),
         "--delay",       String(delay),
-      ], {
+      ];
+      if (skipLeave) args.push("--skip-leave");
+      const proc = spawn("python3", args, {
         env: { ...process.env, DM_MESSAGE: dmMessage, DATABASE_URL: dbUrl },
       });
 
@@ -154,6 +157,7 @@ class CampaignManager {
     dmMessage: string,
     botQuota: number,
     delay: number,
+    skipInvite = false,
   ): Promise<number> {
     if (this.activeCampaignId !== null) throw new Error("A campaign is already running");
 
@@ -190,7 +194,7 @@ class CampaignManager {
     this.stopping = false;
 
     // Run the full campaign in background
-    this.runCampaignLoop(campaign.id, guildId, guildName, selfbotToken, dmMessage, botQuota, delay);
+    this.runCampaignLoop(campaign.id, guildId, guildName, selfbotToken, dmMessage, botQuota, delay, skipInvite);
 
     return campaign.id;
   }
@@ -203,6 +207,7 @@ class CampaignManager {
     dmMessage: string,
     botQuota: number,
     delay: number,
+    skipInvite = false,
   ) {
     try {
       // Members are fetched by the first bot worker after it joins the guild.
@@ -238,25 +243,28 @@ class CampaignManager {
         // Create run record
         const run = await storage.createBotRun(campaignId, bot.id, bot.name || bot.clientId);
 
-        // Invite bot to server
-        try {
-          this.addLog(`Inviting bot ${bot.name || bot.clientId} to ${guildName}...`, "info");
-          await this.inviteBot(bot.clientId, guildId, selfbotToken);
-          this.addLog(`Bot invited. Waiting 15s for join...`, "info");
-        } catch (err: any) {
-          this.addLog(`Failed to invite bot: ${err.message}`, "error");
-          await storage.updateBotStatus(bot.id, "available");
-          continue;
+        // Invite bot to server (skip if bots are already in server)
+        if (skipInvite) {
+          this.addLog(`Bots-already-in-server mode — skipping invite for ${bot.name || bot.clientId}.`, "info");
+        } else {
+          try {
+            this.addLog(`Inviting bot ${bot.name || bot.clientId} to ${guildName}...`, "info");
+            await this.inviteBot(bot.clientId, guildId, selfbotToken);
+            this.addLog(`Bot invited. Waiting 15s for join...`, "info");
+            await sleep(15000); // wait for bot to join the guild
+          } catch (err: any) {
+            this.addLog(`Failed to invite bot: ${err.message}`, "error");
+            await storage.updateBotStatus(bot.id, "available");
+            continue;
+          }
         }
-
-        await sleep(15000); // wait for bot to join the guild
 
         if (this.stopping) break;
 
         // Spawn worker
         const dbUrl = process.env.DATABASE_URL!;
         const exitCode = await this.spawnWorker(
-          bot.token, campaignId, run.id, guildId, botQuota, delay, dmMessage, dbUrl
+          bot.token, campaignId, run.id, guildId, botQuota, delay, dmMessage, dbUrl, skipInvite
         );
         this.addLog(`Bot run #${rotationNum} finished (exit code ${exitCode})`, exitCode === 0 ? "success" : "error");
 

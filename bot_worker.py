@@ -34,6 +34,7 @@ parser.add_argument("--bot-run-id",  required=True, type=int)
 parser.add_argument("--guild-id",    required=True, type=int)
 parser.add_argument("--quota",       required=True, type=int)
 parser.add_argument("--delay",       required=True, type=float)
+parser.add_argument("--skip-leave",  action="store_true", default=False)
 args = parser.parse_args()
 
 
@@ -168,7 +169,7 @@ def parse_dm_payload(raw: str):
 # ── Discord bot ────────────────────────────────────────────────────────────
 
 class WorkerBot(discord.Client):
-    def __init__(self, campaign_id, bot_run_id, guild_id, quota, delay):
+    def __init__(self, campaign_id, bot_run_id, guild_id, quota, delay, skip_leave=False):
         intents = discord.Intents.default()
         intents.members = True
         intents.guilds  = True
@@ -178,6 +179,7 @@ class WorkerBot(discord.Client):
         self.guild_id    = guild_id
         self.quota       = quota
         self.delay       = delay
+        self.skip_leave  = skip_leave
 
     async def on_ready(self):
         log(f"[Worker] Logged in as {self.user} (ID: {self.user.id})")
@@ -323,11 +325,14 @@ class WorkerBot(discord.Client):
         finally:
             conn.close()
 
-        try:
-            await guild.leave()
-            log(f"[Worker] Left guild {guild.name}")
-        except Exception as exc:
-            log(f"[Worker] Could not leave guild: {exc}")
+        if self.skip_leave:
+            log(f"[Worker] Skip-leave mode — staying in guild {guild.name}")
+        else:
+            try:
+                await guild.leave()
+                log(f"[Worker] Left guild {guild.name}")
+            except Exception as exc:
+                log(f"[Worker] Could not leave guild: {exc}")
 
         await self.close()
 
@@ -339,6 +344,7 @@ try:
         guild_id=args.guild_id,
         quota=args.quota,
         delay=args.delay,
+        skip_leave=args.skip_leave,
     )
     bot.run(args.token)
 except Exception as exc:

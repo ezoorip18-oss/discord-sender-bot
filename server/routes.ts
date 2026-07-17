@@ -12,6 +12,7 @@ const campaignStartInput = z.object({
   dmMessage:   z.string().min(1, "Message required"),
   botQuota:    z.number().int().min(1).max(10000).default(500),
   delay:       z.number().int().min(1).max(60).default(3),
+  skipInvite:  z.boolean().default(false),
 });
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
@@ -62,8 +63,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ── Campaign ──────────────────────────────────────────────────────────
   app.post("/api/campaign/start", async (req, res) => {
     try {
-      const { serverInput, dmMessage, botQuota, delay } = campaignStartInput.parse(req.body);
-      const campaignId = await campaignManager.startCampaign(serverInput, dmMessage, botQuota, delay);
+      const { serverInput, dmMessage, botQuota, delay, skipInvite } = campaignStartInput.parse(req.body);
+      const campaignId = await campaignManager.startCampaign(serverInput, dmMessage, botQuota, delay, skipInvite);
       res.json({ campaignId, status: "initializing" });
     } catch (e: any) {
       res.status(400).json({ message: e.message });
