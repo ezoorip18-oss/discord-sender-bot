@@ -78,16 +78,60 @@ class CampaignManager {
   }
 
   private async inviteBot(clientId: string, guildId: string, token: string) {
-    const r = await fetch(
-      `https://discord.com/api/v10/oauth2/authorize?client_id=${clientId}&scope=bot&permissions=0`,
-      {
-        method: "POST",
-        headers: { Authorization: token, "Content-Type": "application/json" },
-        body: JSON.stringify({ authorize: true, guild_id: guildId }),
-      }
-    );
+    // Small random jitter so requests don't arrive machine-perfectly spaced
+    await sleep(1000 + Math.floor(Math.random() * 2000));
+
+    // Mirror headers the real Discord web client sends so the request doesn't
+    // look like raw API access (which is what triggers hCaptcha)
+    const superProps = Buffer.from(JSON.stringify({
+      os: "Windows",
+      browser: "Chrome",
+      device: "",
+      system_locale: "en-US",
+      browser_user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+      browser_version: "125.0.0.0",
+      os_version: "10",
+      referrer: "",
+      referring_domain: "",
+      referrer_current: "",
+      referring_domain_current: "",
+      release_channel: "stable",
+      client_build_number: 312139,
+      client_event_source: null,
+    })).toString("base64");
+
+    const inviteUrl = `https://discord.com/api/v10/oauth2/authorize?client_id=${clientId}&scope=bot&permissions=0`;
+    const r = await fetch(inviteUrl, {
+      method: "POST",
+      headers: {
+        Authorization: token,
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "X-Super-Properties": superProps,
+        "X-Discord-Locale": "en-US",
+        "X-Discord-Timezone": "America/New_York",
+        "Origin": "https://discord.com",
+        "Referer": `https://discord.com/oauth2/authorize?client_id=${clientId}&scope=bot&permissions=0`,
+      },
+      body: JSON.stringify({ authorize: true, guild_id: guildId }),
+    });
+
     if (!r.ok) {
-      const body = await r.text();
+      let body = "";
+      try {
+        const json = await r.json();
+        // Discord returns captcha_key when hCaptcha is needed
+        if (json?.captcha_key) {
+          throw new Error(
+            `hCaptcha triggered for client ${clientId}. ` +
+            `Try waiting 5–10 min and retrying, or enable "Bots already in server" mode and add bots manually.`
+          );
+        }
+        body = JSON.stringify(json);
+      } catch (e: any) {
+        if (e.message.includes("hCaptcha")) throw e;
+        body = await r.text().catch(() => String(r.status));
+      }
       throw new Error(`Invite failed for client ${clientId}: ${r.status} ${body}`);
     }
   }
