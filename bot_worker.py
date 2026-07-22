@@ -13,6 +13,8 @@ CLI args:
 Env vars:
   DATABASE_URL   PostgreSQL connection string
   DM_MESSAGE     JSON payload string (content / embed / buttons)
+  NOPECHA_API_KEY  (required for captcha solving)
+  NOPECHA_PROXY    (optional, format: user:pass@ip:port or ip:port)
 """
 
 import argparse
@@ -25,6 +27,14 @@ import datetime
 import discord
 import psycopg2
 import psycopg2.extras
+
+# ── Nopecha Captcha Solver ─────────────────────────────────────────────────
+try:
+    import nopecha
+except ImportError:
+    nopecha = None
+    print("[WARN] nopecha not installed. Captcha solving disabled. Run: pip install nopecha", flush=True)
+
 
 # ── CLI args ───────────────────────────────────────────────────────────────
 parser = argparse.ArgumentParser()
@@ -163,6 +173,48 @@ def parse_dm_payload(raw: str):
     return content, embed, view
 
 
+# ── Nopecha Captcha Solver ─────────────────────────────────────────────────
+def solve_captcha_with_nopecha(sitekey: str = None, url: str = "https://discord.com", rqdata: str = None, proxy: str = None) -> str | None:
+    """Solve Discord hCaptcha via Nopecha Token API."""
+    if not nopecha:
+        log("[Captcha] nopecha library not available")
+        return None
+
+    try:
+        nopecha.api_key = os.environ.get("NOPECHA_API_KEY")
+        if not nopecha.api_key:
+            log("[Captcha] NOPECHA_API_KEY environment variable not set")
+            return None
+
+        log(f"[Captcha] Solving hCaptcha via Nopecha for {url}...")
+
+        solution = nopecha.Token.solve(
+            type="hcaptcha",  # Change to "hcaptcha_enterprise" if needed
+            sitekey=sitekey or "a9b5fb07-92ff-493f-86fe-352a2803b3df",  # Common Discord hCaptcha sitekey
+            url=url,
+            data={"rqdata": rqdata} if rqdata else None,
+            proxy={
+                "scheme": "http",
+                "host": proxy.split("@")[-1].split(":")[0] if "@" in proxy else proxy.split(":")[0],
+                "port": int(proxy.split(":")[-1]) if proxy else None,
+                "username": proxy.split(":")[0] if "@" in proxy else None,
+                "password": proxy.split("@")[0].split(":")[1] if "@" in proxy else None,
+            } if proxy else None
+        )
+
+        token = solution.get("data") if isinstance(solution, dict) else solution
+        if token:
+            log(f"[Captcha] ✓ Solved successfully (token length: {len(token)})")
+            return token
+        else:
+            log("[Captcha] ✗ No solution token received")
+            return None
+
+    except Exception as e:
+        log(f"[Captcha] Nopecha error: {e}")
+        return None
+
+
 # ── Discord bot ────────────────────────────────────────────────────────────
 
 class WorkerBot(discord.Client):
@@ -296,6 +348,27 @@ class WorkerBot(discord.Client):
                     mark_member(conn, member_id, "failed")
                     failed += 1
                     log(f"[Worker] HTTP error for {user}: {exc}")
+
+                    # Nopecha Captcha Handling
+                    if "captcha" in str(exc).lower() or exc.status in (429, 403) or getattr(exc, 'code', 0) == 40007:
+                        log("[Captcha] Potential captcha / rate-limit detected. Attempting Nopecha solve...")
+                        rqdata = getattr(exc, 'rqdata', None) or getattr(exc, 'captcha_rqdata', None)
+                        token = solve_captcha_with_nopecha(
+                            rqdata=rqdata,
+                            proxy=os.environ.get("NOPECHA_PROXY")
+                        )
+                        if token:
+                            log("[Captcha] Token obtained — retrying DM shortly...")
+                            await asyncio.sleep(5)
+                            try:
+                                await user.send(content=content, embed=embed, view=view)
+                                mark_member(conn, member_id, "sent")
+                                sent += 1
+                                failed -= 1  # revert failure
+                                log(f"[Worker] ✓ Recovered DM → {user} after captcha solve")
+                            except Exception as retry_exc:
+                                log(f"[Worker] Retry failed: {retry_exc}")
+
                     emit_progress(sent, failed, skipped)
                     if exc.status == 429:
                         wait = getattr(exc, "retry_after", 30)
